@@ -1,12 +1,15 @@
 from fastapi import FastAPI
 from app.models.base import Base
 from app.core.database import engine
+from app.routes.gstin import router as gstin_router
 
 app = FastAPI(
     title="VyapaarBandhu",
     description="AI GST Compliance Assistant for Indian Small Businesses",
     version="0.1.0"
 )
+
+app.include_router(gstin_router)
 
 @app.on_event("startup")
 def startup():
