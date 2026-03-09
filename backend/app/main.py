@@ -1,11 +1,11 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.models.base import Base
 from app.core.database import engine
 from app.routes.gstin import router as gstin_router
 from app.routes.compliance import router as compliance_router
 from app.routes.whatsapp import router as whatsapp_router
-
-
+from app.routes.dashboard import router as dashboard_router
 
 app = FastAPI(
     title="VyapaarBandhu",
@@ -13,9 +13,24 @@ app = FastAPI(
     version="0.1.0"
 )
 
+# CORS — allow Vercel frontend + localhost
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "https://vyapaarbandhu-ca-elite-3u61v8vj5-mavrickds136-6353s-projects.vercel.app",
+        "https://*.vercel.app",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(gstin_router)
 app.include_router(compliance_router)
 app.include_router(whatsapp_router)
+app.include_router(dashboard_router)
 
 @app.on_event("startup")
 def startup():

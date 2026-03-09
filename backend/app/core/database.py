@@ -7,11 +7,15 @@ load_dotenv()
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://vyapaar_bandhu_db_user:bgcHI8sWwK301ov5V9vD277zcPpwaJKs@dpg-d6mq127tskes73e2m230-a/vyapaar_bandhu_db"
+    "postgresql://postgres:postgres@127.0.0.1:5433/vyapaar_bandhu"
 )
 
-# Render PostgreSQL requires this
-engine = create_engine(DATABASE_URL, connect_args={"sslmode": "require"})
+# Use SSL only for Render (not for local)
+if "render.com" in DATABASE_URL or "dpg-" in DATABASE_URL:
+    engine = create_engine(DATABASE_URL, connect_args={"sslmode": "require"})
+else:
+    engine = create_engine(DATABASE_URL)
+
 SessionLocal = sessionmaker(bind=engine)
 
 def get_db():
