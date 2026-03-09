@@ -95,9 +95,18 @@ async def whatsapp_webhook(
             args=(MediaUrl0, From),
             daemon=True
         ).start()
-
         response = MessagingResponse()
         response.message("Photo mil gayi! Processing kar raha hoon... (10-20 seconds)")
+        return PlainTextResponse(str(response), media_type="application/xml")
+
+    elif int(NumMedia) > 0 and "pdf" in MediaContentType0.lower():
+        threading.Thread(
+            target=process_pdf_background,
+            args=(MediaUrl0, From),
+            daemon=True
+        ).start()
+        response = MessagingResponse()
+        response.message("Bank statement mil gaya! Parse kar raha hoon... (15-20 seconds) 🏦")
         return PlainTextResponse(str(response), media_type="application/xml")
 
     elif Body:
@@ -149,6 +158,57 @@ def process_image_background(media_url: str, sender: str):
         send_whatsapp_message(sender, "Error aaya. Dobara photo bhejiye.")
 
 
+def process_pdf_background(media_url: str, sender: str):
+    try:
+        import requests as req
+        import os
+        from app.services.bank_pdf_parser import parse_bank_statement_from_bytes
+
+        TWILIO_SID   = os.getenv("TWILIO_ACCOUNT_SID")
+        TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+
+        print(f"📥 Downloading PDF from Twilio...")
+        response = req.get(media_url, auth=(TWILIO_SID, TWILIO_TOKEN), timeout=30)
+
+        if response.status_code != 200:
+            send_whatsapp_message(sender, "PDF download nahi hua. Dobara bhejiye.")
+            return
+
+        pdf_bytes = response.content
+        print(f"✅ PDF downloaded: {len(pdf_bytes)} bytes")
+
+        result = parse_bank_statement_from_bytes(pdf_bytes)
+
+        if not result["success"]:
+            send_whatsapp_message(sender, f"PDF parse nahi hua: {result['error']}")
+            return
+
+        txns = result["transactions"]
+        bank = result["bank"]
+
+        msg  = f"🏦 {bank} Bank Statement Parse Ho Gayi!\n\n"
+        msg += f"📊 Total Transactions: {result['total_transactions']}\n"
+        msg += f"💸 Total Debit: Rs.{result['total_debit']:,.2f}\n"
+        msg += f"💰 Total Credit: Rs.{result['total_credit']:,.2f}\n"
+        msg += f"📋 ITC Possible: {result['itc_possible_count']} transactions\n\n"
+
+        # Show top 5 ITC-eligible transactions
+        itc_txns = [t for t in txns if t.get("itc_possible")][:5]
+        if itc_txns:
+            msg += "✅ ITC Eligible Transactions:\n"
+            for t in itc_txns:
+                msg += f"• {t['date']} — {t['description'][:30]} — Rs.{t['amount']:,.0f}\n"
+
+        msg += f"\n💡 Tip: In {result['itc_possible_count']} transactions pe ITC claim ho sakta hai!"
+        msg += "\nInvoices upload karke exact ITC calculate karein 📄"
+
+        send_whatsapp_message(sender, msg)
+
+    except Exception as e:
+        print(f"❌ PDF processing error: {e}")
+        send_whatsapp_message(sender, "PDF process karne mein error aaya. Dobara bhejiye.")
+
+
 def handle_text(body: str, sender: str) -> str:
     body_lower = body.lower().strip()
     session = PENDING_CONFIRMATIONS.get(sender)
@@ -187,8 +247,9 @@ def handle_text(body: str, sender: str) -> str:
         return (
             "Namaste! VyapaarBandhu mein swagat hai!\n\n"
             "1. Invoice ki photo bhejiye -> ITC calculate karunga\n"
-            "2. 'tax' likhiye -> GST liability\n"
-            "3. 'deadline' likhiye -> filing dates"
+            "2. Bank statement PDF bhejiye -> transactions parse karunga\n"
+            "3. 'tax' likhiye -> GST liability\n"
+            "4. 'deadline' likhiye -> filing dates"
         )
     elif any(w in body_lower for w in ["tax", "gst", "kitna", "liability"]):
         return "Is mahine abhi tak koi invoice upload nahi hua.\nInvoice ki photo bhejiye!"
@@ -250,7 +311,6 @@ def process_confirmed_invoice(sender: str) -> str:
     from app.services.invoice_service import save_invoice
     from app.services.classification_service import classify_invoice
 
-    # Classify invoice for ITC eligibility under Section 17(5)
     classification = classify_invoice(fields)
     db_result = save_invoice(sender, fields)
 
@@ -269,7 +329,6 @@ def process_confirmed_invoice(sender: str) -> str:
     else:
         msg += f"\n⚠️ DB save mein error: {db_result.get('error', 'unknown')}\n"
 
-    # AI Classification result
     msg += f"\n🧠 AI Analysis:\n"
     msg += f"Category: {classification['category']}\n"
     if classification.get('itc_blocked') and classification.get('itc_blocked') > 0:
