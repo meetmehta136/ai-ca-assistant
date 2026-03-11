@@ -6,74 +6,62 @@ load_dotenv()
 
 HF_API_KEY = os.getenv("HF_API_KEY")
 
-# Section 17(5) blocked categories under GST
-BLOCKED_CATEGORIES = {
-    "Food & Beverage":      {"blocked": True,  "reason": "Section 17(5)(b) — food/beverages"},
-    "Club Membership":      {"blocked": True,  "reason": "Section 17(5)(b) — club membership"},
-    "Health & Fitness":     {"blocked": True,  "reason": "Section 17(5)(b) — health services"},
-    "Personal Vehicle":     {"blocked": True,  "reason": "Section 17(5)(a) — motor vehicle personal use"},
-    "Travel & Hotel":       {"blocked": False, "reason": "Eligible if for business travel"},
-    "Office Supplies":      {"blocked": False, "reason": "Fully eligible"},
-    "Electronics":          {"blocked": False, "reason": "Capital goods — fully eligible"},
-    "Furniture":            {"blocked": False, "reason": "Capital goods — fully eligible"},
-    "Raw Materials":        {"blocked": False, "reason": "Inputs — fully eligible"},
-    "Professional Services":{"blocked": False, "reason": "Business services — eligible"},
-    "Pharmaceuticals":      {"blocked": False, "reason": "Business use — eligible"},
-    "Clothing & Apparel":   {"blocked": True,  "reason": "Section 17(5) — personal use"},
-    "Other":                {"blocked": False, "reason": "Verify manually"},
+# Map your trained model's categories to GST ITC rules
+CATEGORY_MAP = {
+    "Food":        {"blocked": True,  "reason": "Section 17(5)(b) — food/beverages"},
+    "Vehicle":     {"blocked": True,  "reason": "Section 17(5)(a) — motor vehicle personal use"},
+    "Clothing":    {"blocked": True,  "reason": "Section 17(5) — personal use apparel"},
+    "Electronics": {"blocked": False, "reason": "Capital goods — fully eligible"},
+    "Office":      {"blocked": False, "reason": "Office supplies — fully eligible"},
+    "Pharma":      {"blocked": False, "reason": "Business use — eligible"},
+    "Travel":      {"blocked": False, "reason": "Business travel — eligible"},
+    "Other":       {"blocked": False, "reason": "Verify manually"},
 }
-
-CANDIDATE_LABELS = list(BLOCKED_CATEGORIES.keys())
 
 
 def classify_invoice_description(description: str) -> dict:
     if not description or len(description.strip()) < 3:
         return {"category": "Other", "confidence": 0, "itc_blocked": False, "reason": "No description"}
 
-    print(f"🧠 Classifying: {description[:80]}")
+    print(f"🧠 Classifying with VyapaarBandhu model: {description[:80]}")
 
     headers = {
         "Authorization": f"Bearer {HF_API_KEY}",
         "Content-Type": "application/json"
     }
 
-    payload = {
-        "inputs": description,
-        "parameters": {
-            "candidate_labels": CANDIDATE_LABELS,
-            "multi_label": False
-        }
-    }
-
     try:
+        # Use YOUR trained model
         response = requests.post(
-            "https://router.huggingface.co/hf-inference/models/facebook/bart-large-mnli",
+            "https://router.huggingface.co/hf-inference/models/meet136/indicbert-gst-classifier",
             headers=headers,
-            json=payload,
+            json={"inputs": description},
             timeout=30
         )
 
-        print(f"📥 HF status: {response.status_code}")
+        print(f"📥 Model status: {response.status_code}")
 
         if response.status_code == 503:
-            print("⏳ Model loading, using fallback...")
+            print("⏳ Model loading, using keyword fallback...")
             return classify_with_keywords(description)
 
         if response.status_code != 200:
-            print(f"❌ HF error: {response.text[:200]}")
+            print(f"❌ Model error: {response.text[:200]}")
             return classify_with_keywords(description)
 
         result = response.json()
 
-        if isinstance(result, dict) and "error" in result:
-            print(f"❌ HF error: {result['error']}")
+        # Text classification returns list of {label, score}
+        if isinstance(result, list) and len(result) > 0:
+            # Could be [[{label, score}]] or [{label, score}]
+            items = result[0] if isinstance(result[0], list) else result
+            top = max(items, key=lambda x: x["score"])
+            top_label = top["label"]
+            top_score = top["score"]
+        else:
             return classify_with_keywords(description)
 
-        top_label = result[0]["label"]
-        top_score = result[0]["score"]
-
-        category_info = BLOCKED_CATEGORIES[top_label]
-
+        category_info = CATEGORY_MAP.get(top_label, CATEGORY_MAP["Other"])
         print(f"✅ Category: {top_label} | Score: {top_score:.2f} | Blocked: {category_info['blocked']}")
 
         return {
@@ -81,7 +69,7 @@ def classify_invoice_description(description: str) -> dict:
             "confidence":  round(top_score, 3),
             "itc_blocked": category_info["blocked"],
             "reason":      category_info["reason"],
-            "all_scores":  {r["label"]: round(r["score"], 3) for r in result[:3]}
+            "all_scores":  {item["label"]: round(item["score"], 3) for item in items[:3]}
         }
 
     except Exception as e:
@@ -91,38 +79,29 @@ def classify_invoice_description(description: str) -> dict:
 
 def classify_with_keywords(description: str) -> dict:
     desc = description.lower()
-
     rules = [
-        (["lunch", "dinner", "breakfast", "food", "meal", "restaurant", "snack", "tea", "coffee", "catering", "bhojan"], "Food & Beverage"),
-        (["laptop", "computer", "mobile", "phone", "tablet", "monitor", "printer", "scanner", "camera", "dell", "hp", "lenovo"], "Electronics"),
-        (["chair", "table", "desk", "furniture", "sofa", "shelf", "cabinet", "rack", "almirah"], "Furniture"),
-        (["car", "vehicle", "bike", "scooter", "petrol", "diesel", "fuel", "automobile", "gaadi"], "Personal Vehicle"),
-        (["hotel", "flight", "train", "travel", "ticket", "accommodation", "lodging", "yatra"], "Travel & Hotel"),
-        (["medicine", "tablet", "capsule", "pharma", "drug", "injection", "medical", "health"], "Pharmaceuticals"),
-        (["gym", "fitness", "yoga", "spa", "massage", "wellness", "club", "membership"], "Health & Fitness"),
-        (["shirt", "pant", "cloth", "uniform", "dress", "fabric", "textile", "garment", "kapda"], "Clothing & Apparel"),
-        (["paper", "pen", "pencil", "stationery", "stapler", "file", "folder", "office supply"], "Office Supplies"),
-        (["rice", "wheat", "dal", "oil", "sugar", "flour", "grain", "moong", "atta", "chawal"], "Raw Materials"),
-        (["consulting", "legal", "accounting", "audit", "service", "professional", "advisory"], "Professional Services"),
+        (["lunch", "dinner", "food", "meal", "restaurant", "catering", "bhojan", "khana", "chai", "nashta"], "Food"),
+        (["laptop", "computer", "mobile", "phone", "monitor", "printer", "camera", "dell", "hp", "router"], "Electronics"),
+        (["car", "bike", "scooter", "petrol", "diesel", "vehicle", "gaadi", "automobile"], "Vehicle"),
+        (["hotel", "flight", "train", "travel", "ticket", "yatra", "bus"], "Travel"),
+        (["medicine", "tablet", "pharma", "drug", "medical", "dawa", "chemist"], "Pharma"),
+        (["shirt", "cloth", "uniform", "fabric", "textile", "garment", "kapda"], "Clothing"),
+        (["paper", "pen", "stationery", "stapler", "file", "office", "furniture", "chair", "desk"], "Office"),
     ]
-
     for keywords, category in rules:
         if any(kw in desc for kw in keywords):
-            info = BLOCKED_CATEGORIES[category]
+            info = CATEGORY_MAP[category]
             return {
-                "category":    category,
-                "confidence":  0.85,
+                "category": category, "confidence": 0.85,
                 "itc_blocked": info["blocked"],
-                "reason":      info["reason"] + " (keyword match)",
-                "all_scores":  {}
+                "reason": info["reason"] + " (keyword match)",
+                "all_scores": {}
             }
-
     return {
-        "category":    "Other",
-        "confidence":  0.60,
+        "category": "Other", "confidence": 0.60,
         "itc_blocked": False,
-        "reason":      "Could not classify — verify manually",
-        "all_scores":  {}
+        "reason": "Could not classify — verify manually",
+        "all_scores": {}
     }
 
 

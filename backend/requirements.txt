@@ -92,3 +92,5 @@ wcwidth==0.6.0
 websockets==16.0
 xgboost==3.2.0
 yarl==1.23.0
+transformers
+torch
